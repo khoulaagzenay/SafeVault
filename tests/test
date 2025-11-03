@@ -1,74 +1,73 @@
-```javascript
-// tests/security.test.js
-const request = require('supertest');
-const app = require('../app'); // your express app
-const db = require('../db/connection'); // database helper
+using NUnit.Framework;
+using Microsoft.EntityFrameworkCore;
+using FinalProject.Models;
+using FinalProject.Services;
+using System.Reflection;
+using Microsoft.Data.Sqlite;
 
-describe('Security tests', () => {
-  afterAll(async () => {
-    // close DB connections if necessary
-    await db.close();
-  });
 
-  test('SQL injection attempt should not return extra records', async () => {
-    // Simulate an attempt: e.g. ?user=admin' OR '1'='1
-    const res = await request(app)
-      .get('/api/users')         // example route expecting ?username=
-      .query({ username: "admin' OR '1'='1" })
-      .expect(200);
+namespace SafeVault.Tests
+{
+    [TestFixture]
+    public class AuthServiceTests
+    {
+        private AppDbContext _context;
+        private AuthService _authService;
+        private SqliteConnection _connection;
 
-    // Application should treat input as data and not return a privileged extra record
-    // Adjust assertion based on your app behaviour:
-    expect(res.body).toHaveProperty('users');
-    // If you expect a single user or empty result for this bad input:
-    expect(Array.isArray(res.body.users)).toBe(true);
-    // Ensure not unexpectedly returning all users:
-    expect(res.body.users.length).toBeLessThanOrEqual(1);
-  });
+        [SetUp]
+        public void Setup()
+        {
+            Console.WriteLine("\nTestInputValidation setup starting...");
 
-  test('XSS payload should be encoded in output', async () => {
-    const malicious = "<script>alert('xss')</script>";
-    // Suppose POST /messages saves and returns message
-    const post = await request(app)
-      .post('/api/messages')
-      .send({ message: malicious })
-      .expect(201);
+            var connectionString = "Data Source=:memory"; 
+            _authService = new AuthService(connectionString);
 
-    const id = post.body.id;
-    const get = await request(app)
-      .get(`/api/messages/${id}`)
-      .expect(200);
+            _connection = new SqliteConnection(connectionString);
+            _connection.Open();
 
-    // The returned message should not contain raw "<script>"
-    expect(get.text).not.toContain(malicious);
-    // Optionally verify that characters were escaped
-    expect(get.text).toContain('&lt;script&gt;');
-  });
+            var dropTable = _connection.CreateCommand();
+            dropTable.CommandText = "DROP TABLE IF EXISTS Users;";
+            dropTable.ExecuteNonQuery();
 
-  test('RBAC: non-admin cannot access admin route', async () => {
-    // Authenticate as normal user to get token (adjust to your auth flow)
-    const auth = await request(app)
-      .post('/auth/login')
-      .send({ username: 'normaluser', password: 'password' })
-      .expect(200);
+            var createTable = _connection.CreateCommand();
+            createTable.CommandText = @"
+                CREATE TABLE Users (
+                    UserID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Username TEXT NOT NULL,
+                    Email TEXT NOT NULL,
+                    PasswordHash TEXT NOT NULL,
+                    Role TEXT NOT NULL
+                );";
+            createTable.ExecuteNonQuery();
+        }
 
-    const token = auth.body.token;
-    await request(app)
-      .delete('/api/admin/users/42')  // admin-only endpoint
-      .set('Authorization', `Bearer ${token}`)
-      .expect(403);
-  });
+        [Test]
+        public void AuthenticateUser()
+        {
+            Console.WriteLine("🚨 Running AuthenticateUser...");
 
-  test('RBAC: admin can access admin route', async () => {
-    const auth = await request(app)
-      .post('/auth/login')
-      .send({ username: 'adminuser', password: 'adminpassword' })
-      .expect(200);
+            // Should return true when password matches
+            var input = new UserInput
+            {
+                Username = "testuser",
+                Email = "test@example.com",
+                Password = "Secret123@"
+            };
 
-    const token = auth.body.token;
-    await request(app)
-      .delete('/api/admin/users/42')
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-  });
-});
+            _authService.StoreUser(input, role: "User");
+
+            Assert.That(_authService.AuthenticateUser(input.Username, input.Password), Is.True, "User should be authenticated with correct password.");
+            Assert.That(_authService.AuthenticateUser(input.Username, "WrongPassword"), Is.False, "Authentication should fail with incorrect password.");
+
+            Console.WriteLine("✅ AuthenticateUser validation tests passed.");
+        }
+        
+        [TearDown]
+        public void Teardown()
+        {
+            _connection?.Dispose();
+            Console.WriteLine("✅ Test finished.");
+        }
+    }
+}
