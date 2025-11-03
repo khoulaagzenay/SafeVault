@@ -1,0 +1,15 @@
+
+module.exports = function authorize(requiredRole) {
+  return (req, res, next) => {
+    try {
+      const user = req.user; // assume authentication middleware put decoded token here
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+      if (!user.roles || !user.roles.includes(requiredRole)) {
+        return res.status(403).json({ error: 'Forbidden - insufficient role' });
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+};
