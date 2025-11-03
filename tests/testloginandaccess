@@ -1,0 +1,221 @@
+using NUnit.Framework;
+using FinalProject.Models;
+using FinalProject.Services;
+using FinalProject.Controllers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
+using System.Collections.Generic;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace SafeVault.Tests
+{
+    [TestFixture]
+    public class TestLoginAndAccess
+    {
+        private AuthService _authService;
+        private AdminController _controller;
+        private SqliteConnection _connection;
+
+        [SetUp]
+        public void Setup()
+        {
+            Console.WriteLine("\nTestLoginAndAccess setup starting...");
+
+            var connectionString = "Data Source=:memory";
+            _authService = new AuthService(connectionString);
+
+            _connection = new SqliteConnection(connectionString);
+            _connection.Open();
+
+            var dropTable = _connection.CreateCommand();
+            dropTable.CommandText = "DROP TABLE IF EXISTS Users;";
+            dropTable.ExecuteNonQuery();
+
+            var createTable = _connection.CreateCommand();
+            createTable.CommandText = @"
+                CREATE TABLE Users (
+                    UserID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Username TEXT NOT NULL,
+                    Email TEXT NOT NULL,
+                    PasswordHash TEXT NOT NULL,
+                    Role TEXT NOT NULL
+                );";
+            createTable.ExecuteNonQuery();
+
+            _controller = new AdminController(_authService);
+        }
+
+        [Test]
+        public void ValidLogin_ShouldAuthenticate()
+        {
+            Console.WriteLine("🚨 Running ValidLogin_ShouldAuthenticate...");
+
+            var input = new UserInput
+            {
+                Username = "validuser",
+                Email = "valid@example.com",
+                Password = "ValidPass123!"
+            };
+
+            _authService.StoreUser(input, role: "User");
+
+            Assert.That(_authService.AuthenticateUser("validuser", "ValidPass123!"), Is.True, "Valid login should succeed.");
+
+            Console.WriteLine("✅ ValidLogin_ShouldAuthenticate passed.");
+        }
+
+        [Test]
+        public void InvalidLogin_ShouldFail()
+        {
+            Console.WriteLine("🚨 Running InvalidLogin_ShouldFail...");
+
+            var input = new UserInput
+            {
+                Username = "invaliduser",
+                Email = "invalid@example.com",
+                Password = "WrongPass123!"
+            };
+
+            _authService.StoreUser(input, role: "User");
+
+            Assert.That(_authService.AuthenticateUser("invaliduser", "IncorrectPassword"), Is.False, "Invalid login should fail.");
+
+            Console.WriteLine("✅ InvalidLogin_ShouldFail passed.");
+        }
+
+        [Test]
+        public void AdminUser_ShouldAccessAdminDashboard()
+        {
+            Console.WriteLine("🚨 Running AdminUser_ShouldAccessAdminDashboard...");
+
+            var input = new UserInput
+            {
+                Username = "adminuser",
+                Email = "admin@example.com",
+                Password = "AdminPass123!"
+            };
+
+            _authService.StoreUser(input, role: "Admin");
+
+            var httpContext = new DefaultHttpContext();
+            httpContext.Session = new DummySession();
+            httpContext.Session.SetString("Username", "adminuser");
+
+            _controller.ControllerContext = new ControllerContext
+            {
+                HttpContext = httpContext
+            };
+
+            var result = _controller.AdminDashboard();
+
+            Assert.That(result, Is.TypeOf<ViewResult>(), "Admin user should access the dashboard.");
+
+            Console.WriteLine("✅ AdminUser_ShouldAccessAdminDashboard passed.");
+        }
+
+        [Test]
+        public void RegularUser_ShouldBeDeniedAdminAccess()
+        {
+            Console.WriteLine("🚨 Running RegularUser_ShouldBeDeniedAdminAccess...");
+
+            var input = new UserInput
+            {
+                Username = "regularuser",
+                Email = "user@example.com",
+                Password = "UserPass123!"
+            };
+
+            _authService.StoreUser(input, role: "User");
+
+            var httpContext = new DefaultHttpContext();
+            httpContext.Session = new DummySession();
+            httpContext.Session.SetString("Username", "regularuser");
+
+            _controller.ControllerContext = new ControllerContext
+            {
+                HttpContext = httpContext
+            };
+
+            var result = _controller.AdminDashboard();
+
+            Assert.That(result, Is.TypeOf<UnauthorizedResult>(), "Regular user should be denied access.");
+
+            Console.WriteLine("✅ RegularUser_ShouldBeDeniedAdminAccess passed.");
+        }
+
+        [Test]
+        public void UnknownUser_ShouldBeDeniedAdminAccess()
+        {
+            Console.WriteLine("🚨 Running UnknownUser_ShouldBeDeniedAdminAccess...");
+
+            var httpContext = new DefaultHttpContext();
+            httpContext.Session = new DummySession();
+            httpContext.Session.SetString("Username", "ghostuser");
+
+            _controller.ControllerContext = new ControllerContext
+            {
+                HttpContext = httpContext
+            };
+
+            var result = _controller.AdminDashboard();
+
+            Assert.That(result, Is.TypeOf<UnauthorizedResult>(), "Unknown user should be denied access.");
+
+            Console.WriteLine("✅ UnknownUser_ShouldBeDeniedAdminAccess passed.");
+        }
+
+        [Test]
+        public void UnauthenticatedUser_ShouldBeDeniedAdminAccess()
+        {
+            Console.WriteLine("🚨 Running UnauthenticatedUser_ShouldBeDeniedAdminAccess...");
+
+            var httpContext = new DefaultHttpContext();
+            httpContext.Session = new DummySession(); // No username set
+
+            _controller.ControllerContext = new ControllerContext
+            {
+                HttpContext = httpContext
+            };
+
+            var result = _controller.AdminDashboard();
+
+            Assert.That(result, Is.TypeOf<UnauthorizedResult>(), "Unauthenticated user should be denied access.");
+
+            Console.WriteLine("✅ UnauthenticatedUser_ShouldBeDeniedAdminAccess passed.");
+        }
+
+        [TearDown]
+        public void Teardown()
+        {
+            _connection?.Dispose();
+            _controller?.Dispose();
+            Console.WriteLine("✅ LoginAndAccessTests finished.");
+        }
+    }
+
+    public class DummySession : ISession
+    {
+        private readonly Dictionary<string, byte[]> _sessionStorage = new();
+
+        public IEnumerable<string> Keys => _sessionStorage.Keys;
+        public bool IsAvailable => true;
+        public string Id => Guid.NewGuid().ToString();
+
+        public void Clear() => _sessionStorage.Clear();
+        public Task CommitAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task LoadAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public void Remove(string key) => _sessionStorage.Remove(key);
+
+        public void Set(string key, byte[] value) => _sessionStorage[key] = value;
+
+        public bool TryGetValue(string key, out byte[] value) => _sessionStorage.TryGetValue(key, out value);
+
+        public void SetString(string key, string value) => Set(key, Encoding.UTF8.GetBytes(value));
+
+        public string GetString(string key) =>
+            TryGetValue(key, out var value) ? Encoding.UTF8.GetString(value) : null;
+    }
+}
