@@ -1,0 +1,74 @@
+```javascript
+// tests/security.test.js
+const request = require('supertest');
+const app = require('../app'); // your express app
+const db = require('../db/connection'); // database helper
+
+describe('Security tests', () => {
+  afterAll(async () => {
+    // close DB connections if necessary
+    await db.close();
+  });
+
+  test('SQL injection attempt should not return extra records', async () => {
+    // Simulate an attempt: e.g. ?user=admin' OR '1'='1
+    const res = await request(app)
+      .get('/api/users')         // example route expecting ?username=
+      .query({ username: "admin' OR '1'='1" })
+      .expect(200);
+
+    // Application should treat input as data and not return a privileged extra record
+    // Adjust assertion based on your app behaviour:
+    expect(res.body).toHaveProperty('users');
+    // If you expect a single user or empty result for this bad input:
+    expect(Array.isArray(res.body.users)).toBe(true);
+    // Ensure not unexpectedly returning all users:
+    expect(res.body.users.length).toBeLessThanOrEqual(1);
+  });
+
+  test('XSS payload should be encoded in output', async () => {
+    const malicious = "<script>alert('xss')</script>";
+    // Suppose POST /messages saves and returns message
+    const post = await request(app)
+      .post('/api/messages')
+      .send({ message: malicious })
+      .expect(201);
+
+    const id = post.body.id;
+    const get = await request(app)
+      .get(`/api/messages/${id}`)
+      .expect(200);
+
+    // The returned message should not contain raw "<script>"
+    expect(get.text).not.toContain(malicious);
+    // Optionally verify that characters were escaped
+    expect(get.text).toContain('&lt;script&gt;');
+  });
+
+  test('RBAC: non-admin cannot access admin route', async () => {
+    // Authenticate as normal user to get token (adjust to your auth flow)
+    const auth = await request(app)
+      .post('/auth/login')
+      .send({ username: 'normaluser', password: 'password' })
+      .expect(200);
+
+    const token = auth.body.token;
+    await request(app)
+      .delete('/api/admin/users/42')  // admin-only endpoint
+      .set('Authorization', `Bearer ${token}`)
+      .expect(403);
+  });
+
+  test('RBAC: admin can access admin route', async () => {
+    const auth = await request(app)
+      .post('/auth/login')
+      .send({ username: 'adminuser', password: 'adminpassword' })
+      .expect(200);
+
+    const token = auth.body.token;
+    await request(app)
+      .delete('/api/admin/users/42')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+  });
+});
