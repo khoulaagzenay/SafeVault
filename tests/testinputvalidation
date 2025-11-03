@@ -2,7 +2,7 @@ using NUnit.Framework;
 using System;
 using FinalProject.Helpers;
 
-namespace FinalProject.Tests
+namespace SafeVault.Tests
 {
     [TestFixture]
     public class TestInputValidation
